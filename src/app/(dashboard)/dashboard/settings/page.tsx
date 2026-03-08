@@ -203,12 +203,15 @@ export default function SettingsPage() {
   const [fullName, setFullName] = useState('')
   const [savingProfile, setSavingProfile] = useState(false)
   const [profileSaved, setProfileSaved] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetch('/api/settings').then(r => r.json()).then((d: { profile: Record<string, string | null> }) => {
-      setProfile(d.profile)
-      setFullName((d.profile.full_name as string) || '')
-    })
+    fetch('/api/settings').then(r => r.json()).then((d: { profile?: Record<string, string | null> }) => {
+      if (d.profile) {
+        setProfile(d.profile)
+        setFullName((d.profile.full_name as string) || '')
+      }
+    }).catch(() => {}).finally(() => setLoading(false))
   }, [])
 
   async function saveField(field: string, value: string) {
@@ -233,6 +236,17 @@ export default function SettingsPage() {
     setSavingProfile(false)
     setProfileSaved(true)
     setTimeout(() => setProfileSaved(false), 2000)
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Settings</h1>
+          <p className="text-gray-400">Loading...</p>
+        </div>
+      </div>
+    )
   }
 
   return (

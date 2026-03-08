@@ -21,6 +21,8 @@ export interface Profile {
   stripe_subscription_id: string | null
   instantly_api_key: string | null
   stealth_gpt_api_key: string | null
+  apify_api_token: string | null
+  resend_api_key: string | null
   created_at: string
   updated_at: string
 }

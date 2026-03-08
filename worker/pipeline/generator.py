@@ -4,7 +4,8 @@ import json
 import anthropic
 from typing import Dict, List
 
-client = anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
+def _get_client():
+    return anthropic.Anthropic(api_key=os.environ['ANTHROPIC_API_KEY'])
 
 SYSTEM_PROMPT = """You are an expert cold email copywriter specializing in local service businesses.
 You write concise, high-converting cold email sequences that book calls.
@@ -69,7 +70,7 @@ Email 5 CTA: value-add, calendar link"""
 
 async def generate_sequence(campaign: Dict) -> List[Dict]:
     """Generate a 5-email sequence using Claude Sonnet 4.6."""
-    message = client.messages.create(
+    message = _get_client().messages.create(
         model='claude-sonnet-4-6',
         max_tokens=2000,
         system=SYSTEM_PROMPT,

@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { CampaignProgress } from '@/components/campaigns/CampaignProgress'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
+import { LaunchButton } from '@/components/campaigns/LaunchButton'
 
 export default async function CampaignDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -26,10 +27,11 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
         <Link href="/dashboard/campaigns" className="text-gray-400 hover:text-white transition-colors">
           <ArrowLeft size={20} />
         </Link>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold text-white">{campaign.name}</h1>
           <p className="text-gray-400">{campaign.business_type} · {campaign.city}</p>
         </div>
+        {campaign.status === 'draft' && <LaunchButton campaignId={campaign.id} />}
       </div>
 
       <CampaignProgress campaignId={campaign.id} initialStatus={campaign.status} />

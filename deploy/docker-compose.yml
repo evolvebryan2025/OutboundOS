@@ -1,0 +1,33 @@
+# deploy/docker-compose.yml
+# Reacher email-verification service (self-hosted, free)
+#
+# START:  docker compose -f deploy/docker-compose.yml up -d
+# STOP:   docker compose -f deploy/docker-compose.yml down
+# LOGS:   docker compose -f deploy/docker-compose.yml logs -f
+
+version: "3.9"
+
+services:
+  reacher:
+    image: reacherhq/backend:latest
+    container_name: reacher
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # Reacher checks if 'RUST_LOG' is set; 'info' is a good default
+      RUST_LOG: info
+      # Optional: set your own HTTP backend timeout (seconds)
+      RCH_HTTP_TIMEOUT: "30"
+      # Sentry DSN — leave blank to disable error reporting
+      SENTRY_DSN: ""
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v0/check_email"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  default:
+    name: outbound-os-network

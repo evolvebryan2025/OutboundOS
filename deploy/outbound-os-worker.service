@@ -1,0 +1,38 @@
+# deploy/outbound-os-worker.service
+# DigitalOcean systemd service for the Outbound OS FastAPI worker
+#
+# INSTALL:
+#   sudo cp deploy/outbound-os-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable outbound-os-worker
+#   sudo systemctl start outbound-os-worker
+#
+# LOGS:
+#   sudo journalctl -u outbound-os-worker -f
+
+[Unit]
+Description=Outbound OS FastAPI Worker
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=outbound
+WorkingDirectory=/home/outbound/outbound-os/worker
+EnvironmentFile=/home/outbound/outbound-os/worker/.env
+
+# FastAPI — serves /pipeline/start, /analytics/sync, health endpoints
+ExecStart=/home/outbound/.local/bin/uvicorn main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info
+
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=outbound-worker
+
+[Install]
+WantedBy=multi-user.target

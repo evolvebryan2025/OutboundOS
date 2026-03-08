@@ -1,0 +1,33 @@
+# deploy/outbound-os-scheduler.service
+# DigitalOcean systemd service for the Claude Opus optimization scheduler
+#
+# INSTALL:
+#   sudo cp deploy/outbound-os-scheduler.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable outbound-os-scheduler
+#   sudo systemctl start outbound-os-scheduler
+#
+# LOGS:
+#   sudo journalctl -u outbound-os-scheduler -f
+
+[Unit]
+Description=Outbound OS Claude Optimizer Scheduler
+After=network.target outbound-os-worker.service
+Wants=outbound-os-worker.service
+
+[Service]
+Type=simple
+User=outbound
+WorkingDirectory=/home/outbound/outbound-os/worker
+EnvironmentFile=/home/outbound/outbound-os/worker/.env
+
+ExecStart=/usr/bin/python3 -m agent.scheduler
+
+Restart=on-failure
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=outbound-scheduler
+
+[Install]
+WantedBy=multi-user.target

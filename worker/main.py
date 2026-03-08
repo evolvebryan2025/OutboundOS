@@ -11,6 +11,7 @@ from pipeline.verifier import verify_emails
 from pipeline.generator import generate_sequence
 from pipeline.humanizer import humanize_sequence
 from pipeline.instantly import push_to_instantly
+from analytics.sync import sync_campaign_for_user
 from supabase import create_client
 
 load_dotenv()
@@ -129,3 +130,21 @@ async def run_pipeline(campaign_id: str, user_id: str):
 
 async def update_status(campaign_id: str, status: str):
     supabase.table('campaigns').update({'status': status}).eq('id', campaign_id).execute()
+
+
+# ---------------------------------------------------------------------------
+# Analytics sync endpoint (called by Next.js frontend)
+# ---------------------------------------------------------------------------
+
+class AnalyticsSyncRequest(BaseModel):
+    user_id: str
+
+
+@app.post('/analytics/sync')
+async def analytics_sync(
+    request: AnalyticsSyncRequest,
+    x_worker_secret: str = Header(None),
+):
+    verify_worker_secret(x_worker_secret)
+    result = await sync_campaign_for_user(request.user_id)
+    return result

@@ -16,10 +16,14 @@ export async function POST(request: Request) {
   try {
     switch (integration) {
       case 'instantly': {
-        const res = await fetch('https://api.instantly.ai/api/v1/authenticate', {
+        // Instantly v2 API uses Bearer token auth
+        const res = await fetch('https://api.instantly.ai/api/v2/campaigns?limit=1', {
           headers: { Authorization: `Bearer ${apiKey}` },
         })
         if (res.ok) return NextResponse.json({ success: true, message: 'Instantly AI connected ✓' })
+        // Also try v1 query param style as fallback
+        const resV1 = await fetch(`https://api.instantly.ai/api/v1/campaign/list?api_key=${apiKey}&limit=1`)
+        if (resV1.ok) return NextResponse.json({ success: true, message: 'Instantly AI connected ✓' })
         return NextResponse.json({ success: false, message: 'Invalid Instantly AI API key' })
       }
 

@@ -5,37 +5,48 @@ import { useRouter } from 'next/navigation'
 
 export function LaunchButton({ campaignId }: { campaignId: string }) {
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [isError, setIsError] = useState(false)
   const router = useRouter()
 
   async function handleLaunch() {
     setLoading(true)
-    setError(null)
+    setMessage(null)
+    setIsError(false)
     try {
       const res = await fetch(`/api/campaigns/${campaignId}/launch`, { method: 'POST' })
-      const data = await res.json()
+      const text = await res.text()
+      let data: Record<string, string> = {}
+      try { data = JSON.parse(text) } catch { data = { error: text } }
+
       if (!res.ok) {
-        setError(data.error || 'Failed to launch')
+        setIsError(true)
+        setMessage(data.error || `Error ${res.status}: ${text}`)
         return
       }
-      router.refresh()
-    } catch {
-      setError('Network error. Please try again.')
+      setMessage('Campaign launched! Pipeline is running...')
+      setTimeout(() => router.refresh(), 2000)
+    } catch (err) {
+      setIsError(true)
+      setMessage(`Network error: ${err instanceof Error ? err.message : 'Please try again.'}`)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div>
+    <div className="flex flex-col items-end gap-2">
       <button
+        type="button"
         onClick={handleLaunch}
         disabled={loading}
         className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
       >
         {loading ? 'Launching...' : 'Launch Campaign'}
       </button>
-      {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
+      {message && (
+        <p className={`text-sm ${isError ? 'text-red-400' : 'text-green-400'}`}>{message}</p>
+      )}
     </div>
   )
 }

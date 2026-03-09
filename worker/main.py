@@ -4,6 +4,7 @@ from pydantic import BaseModel
 import asyncio
 import os
 import traceback
+import httpx as httpx_client
 from dotenv import load_dotenv
 from pipeline.scraper import scrape_google_maps
 from pipeline.extractor import extract_emails
@@ -21,6 +22,24 @@ supabase = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVIC
 
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 10
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://outboundos.com')
+
+
+async def send_notification(notification_type: str, user_email: str, data: dict):
+    """Send email notification via the frontend API."""
+    try:
+        async with httpx_client.AsyncClient() as client:
+            await client.post(
+                f'{FRONTEND_URL}/api/notifications/send',
+                headers={
+                    'Content-Type': 'application/json',
+                    'x-worker-secret': os.environ['WORKER_SECRET'],
+                },
+                json={'to': user_email, 'type': notification_type, 'data': data},
+                timeout=10,
+            )
+    except Exception as e:
+        print(f'Notification send failed ({notification_type}): {e}')
 
 # Friendly error messages for each pipeline step
 STEP_ERROR_MESSAGES = {
@@ -119,6 +138,20 @@ async def fail_campaign(campaign_id: str, step: str, error: Exception):
     }).eq('id', campaign_id).execute()
     print(f'Pipeline FAILED at step "{step}" for campaign {campaign_id}: {error}')
     print(traceback.format_exc())
+
+    # Send failure notification
+    try:
+        campaign_result = supabase.table('campaigns').select('user_id, name').eq('id', campaign_id).single().execute()
+        if campaign_result.data:
+            profile_result = supabase.table('profiles').select('email').eq('id', campaign_result.data['user_id']).single().execute()
+            if profile_result.data:
+                await send_notification('failed', profile_result.data['email'], {
+                    'campaignName': campaign_result.data['name'],
+                    'campaignId': campaign_id,
+                    'errorMessage': friendly_msg,
+                })
+    except Exception as notify_err:
+        print(f'Failed to send failure notification: {notify_err}')
 
 
 async def run_pipeline(campaign_id: str, user_id: str, resume_from: str = None):
@@ -240,6 +273,12 @@ async def run_pipeline(campaign_id: str, user_id: str, resume_from: str = None):
         # --- PAUSE: Set status to "review" so client can preview emails ---
         await update_status(campaign_id, 'review')
 
+        # Send "ready for review" notification
+        await send_notification('review', profile['email'], {
+            'campaignName': campaign['name'],
+            'campaignId': campaign_id,
+        })
+
     except Exception as e:
         await fail_campaign(campaign_id, 'unknown', e)
 
@@ -277,6 +316,20 @@ async def run_push_step(campaign_id: str, user_id: str):
         }).eq('id', campaign_id).execute()
 
         supabase.rpc('decrement_credits', {'user_id': user_id, 'amount': len(verified_leads)}).execute()
+
+        # Send "campaign live" notification
+        await send_notification('live', profile['email'], {
+            'campaignName': campaign['name'],
+            'campaignId': campaign_id,
+            'leadsCount': len(verified_leads),
+        })
+
+        # Check for low credits
+        profile_after = supabase.table('profiles').select('credits_remaining, email').eq('id', user_id).single().execute()
+        if profile_after.data['credits_remaining'] < 500:
+            await send_notification('low_credits', profile_after.data['email'], {
+                'creditsRemaining': profile_after.data['credits_remaining'],
+            })
 
     except Exception as e:
         await fail_campaign(campaign_id, 'pushing', e)

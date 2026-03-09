@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { CheckCircle2, XCircle, Loader2, Eye, EyeOff, ExternalLink } from 'lucide-react'
 
-type IntegrationKey = 'instantly' | 'stealthgpt' | 'apify' | 'resend'
+type IntegrationKey = 'instantly'
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
 
 interface Integration {
@@ -31,33 +31,6 @@ const INTEGRATIONS: Integration[] = [
     field: 'instantly_api_key',
     placeholder: 'inst_xxxxxxxxxxxxxxxx',
     helpText: 'Find it in Instantly AI → Settings → Integrations → API Key',
-  },
-  {
-    id: 'stealthgpt',
-    label: 'StealthGPT',
-    description: 'Humanize AI-generated emails so they pass AI detectors and feel natural.',
-    docsUrl: 'https://stealthgpt.ai/dashboard',
-    field: 'stealth_gpt_api_key',
-    placeholder: 'sgpt_xxxxxxxxxxxxxxxx',
-    helpText: 'Find it in StealthGPT → Dashboard → API Keys',
-  },
-  {
-    id: 'apify',
-    label: 'Apify',
-    description: 'Scrape Google Maps for local business leads. Leave blank to use the platform shared key.',
-    docsUrl: 'https://console.apify.com/account/integrations',
-    field: 'apify_api_token',
-    placeholder: 'apify_api_xxxxxxxxxxxxxxxx',
-    helpText: 'Optional. Find it in Apify Console → Settings → Integrations',
-  },
-  {
-    id: 'resend',
-    label: 'Resend',
-    description: 'Transactional email for account notifications and alerts.',
-    docsUrl: 'https://resend.com/api-keys',
-    field: 'resend_api_key',
-    placeholder: 're_xxxxxxxxxxxxxxxx',
-    helpText: 'Optional. Find it in Resend → API Keys',
   },
 ]
 

@@ -1,7 +1,7 @@
 # Outbound OS — Build Progress
 
-**Last updated:** 2026-03-08
-**Status:** MVP complete — awaiting credentials + deployment
+**Last updated:** 2026-03-09
+**Status:** MVP complete + simplified for non-technical clients
 
 ---
 
@@ -88,13 +88,35 @@
 
 ---
 
+### Simplification Update (2026-03-09)
+
+| File | What it does |
+|---|---|
+| `supabase/migrations/004_simplify_schema.sql` | Adds onboarding flag, BYOL fields, error handling columns, sender accounts |
+| `src/app/(dashboard)/dashboard/onboarding/page.tsx` | 3-step guided wizard: plan → Instantly key → first campaign |
+| `src/components/campaigns/CampaignForm.tsx` | Simplified to 3 fields + lead source picker + sender account selector |
+| `src/components/campaigns/EmailPreview.tsx` | Email sequence preview with approve/regenerate actions |
+| `src/app/api/campaigns/[id]/approve/route.ts` | Approve reviewed emails and push to Instantly |
+| `src/app/api/campaigns/[id]/retry/route.ts` | Retry failed campaigns from the failed step |
+| `src/app/api/instantly/accounts/route.ts` | Fetch sending accounts + tags from Instantly API |
+| `src/app/api/notifications/send/route.ts` | Email notification endpoint (called by worker) |
+| `src/lib/email.ts` | Resend email templates for review/live/failed/low-credits |
+| `worker/pipeline/context.py` | AI generates pain_point + outcome from 3 inputs |
+| `worker/main.py` | Added retry logic (3x), error handling, review gate, BYOL pipeline, notification triggers |
+| `worker/pipeline/instantly.py` | Added sending_accounts parameter |
+| `railway.toml` | Railway deployment config |
+| `worker/Procfile` | Railway process config |
+| `deploy/README.md` | Updated for Railway (no more SSH/DigitalOcean) |
+
+---
+
 ## What's NOT Built Yet
 
 - [ ] Analytics dashboard UI (`src/app/(dashboard)/dashboard/analytics/page.tsx`)
 - [ ] Per-lead Claude Haiku personalization (Phase 2)
 - [ ] All 5 Stripe pricing tiers wired end-to-end (Growth tier is active; others need Stripe price IDs)
 - [ ] White-label / Agency sub-accounts (Phase 3)
-- [ ] Client onboarding flow (Phase 3)
+- [x] ~~Client onboarding flow~~ (completed in simplification update)
 
 ---
 

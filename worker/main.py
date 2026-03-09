@@ -114,7 +114,11 @@ async def resume_pipeline(
         'error_message': None,
         'failed_at_step': None,
     }).eq('id', request.campaign_id).execute()
-    background_tasks.add_task(run_pipeline, request.campaign_id, request.user_id, resume_from=failed_step)
+    # Route to the correct handler based on failed step
+    if failed_step == 'pushing':
+        background_tasks.add_task(run_push_step, request.campaign_id, request.user_id)
+    else:
+        background_tasks.add_task(run_pipeline, request.campaign_id, request.user_id, resume_from=failed_step)
     return {'status': 'resumed', 'campaign_id': request.campaign_id, 'from_step': failed_step}
 
 

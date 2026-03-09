@@ -46,8 +46,8 @@ async def push_to_instantly(
                 'schedules': [{
                     'name': 'Default Schedule',
                     'timing': {'from': '09:00', 'to': '17:00'},
-                    'days': {'0': False, '1': True, '2': True, '3': True, '4': True, '5': True, '6': False},
-                    'timezone': 'Etc/GMT+5',
+                    'days': {'0': True, '1': True, '2': True, '3': True, '4': True, '5': False, '6': False},
+                    'timezone': 'America/Chicago',
                 }],
             },
             'sequences': [{'steps': steps}],

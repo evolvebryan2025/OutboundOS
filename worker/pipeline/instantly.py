@@ -2,8 +2,7 @@
 import httpx
 from typing import Dict, List, Optional
 
-INSTANTLY_API = 'https://api.instantly.ai/api/v1'
-LEADS_BATCH_SIZE = 100
+INSTANTLY_API = 'https://api.instantly.ai/api/v2'
 
 
 async def push_to_instantly(
@@ -13,82 +12,103 @@ async def push_to_instantly(
     sequence: List[Dict],
     sending_accounts: Optional[List[str]] = None,
 ) -> str:
-    """Push verified leads and email sequence to Instantly AI via REST API."""
+    """Push verified leads and email sequence to Instantly AI via REST API v2."""
     headers = {'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'}
 
     async with httpx.AsyncClient() as client:
-        # 1. Create campaign
-        print(f'[INSTANTLY] Creating campaign: {campaign_name}')
-        campaign_payload = {'name': campaign_name, 'daily_limit': 50}
+        # 1. Create campaign with email sequence included
+        print(f'[INSTANTLY] Creating campaign: {campaign_name}', flush=True)
+
+        # Build sequence steps from our email data
+        steps = []
+        for email in sequence:
+            step = {
+                'type': 'email',
+                'delay': email.get('send_day', 1),
+                'variants': [
+                    {
+                        'subject': email['subject_a'],
+                        'body': email['body'],
+                    },
+                ],
+            }
+            # Add B variant if present
+            if email.get('subject_b') and email['subject_b'] != email['subject_a']:
+                step['variants'].append({
+                    'subject': email['subject_b'],
+                    'body': email['body'],
+                })
+            steps.append(step)
+
+        campaign_payload = {
+            'name': campaign_name,
+            'campaign_schedule': {
+                'schedules': [{
+                    'name': 'Default Schedule',
+                    'timing': {'from': '09:00', 'to': '17:00'},
+                    'days': {'0': False, '1': True, '2': True, '3': True, '4': True, '5': True, '6': False},
+                    'timezone': 'America/New_York',
+                }],
+            },
+            'sequences': [{'steps': steps}],
+            'daily_limit': 50,
+            'stop_on_reply': True,
+            'link_tracking': True,
+            'open_tracking': True,
+            'text_only': False,
+        }
+
+        # Assign sending accounts if specified
+        if sending_accounts:
+            campaign_payload['email_list'] = sending_accounts
+
         campaign_res = await client.post(
-            f'{INSTANTLY_API}/campaign/create',
+            f'{INSTANTLY_API}/campaigns',
             headers=headers,
             json=campaign_payload,
             timeout=30,
         )
-        print(f'[INSTANTLY] Create response: {campaign_res.status_code} {campaign_res.text[:200]}')
+        print(f'[INSTANTLY] Create response: {campaign_res.status_code} {campaign_res.text[:500]}', flush=True)
         campaign_res.raise_for_status()
         campaign_id = campaign_res.json()['id']
-        print(f'[INSTANTLY] Campaign ID: {campaign_id}')
+        print(f'[INSTANTLY] Campaign ID: {campaign_id}', flush=True)
 
-        # 1b. Assign sending accounts if specified
-        if sending_accounts:
-            await client.post(
-                f'{INSTANTLY_API}/campaign/accounts/add',
-                headers=headers,
-                json={'campaign_id': campaign_id, 'account_ids': sending_accounts},
-                timeout=30,
-            )
+        # 2. Add leads one by one (v2 API creates leads individually)
+        print(f'[INSTANTLY] Adding {len(leads)} leads', flush=True)
+        added = 0
+        for lead in leads:
+            first_name = (lead.get('owner_name') or lead.get('business_name', '')).split()[0] if (lead.get('owner_name') or lead.get('business_name')) else ''
+            lead_payload = {
+                'email': lead['email'],
+                'first_name': first_name,
+                'company_name': lead.get('business_name', ''),
+                'campaign': campaign_id,
+            }
+            try:
+                lead_res = await client.post(
+                    f'{INSTANTLY_API}/leads',
+                    headers=headers,
+                    json=lead_payload,
+                    timeout=30,
+                )
+                if lead_res.status_code < 400:
+                    added += 1
+                else:
+                    print(f'[INSTANTLY] Lead add failed ({lead["email"]}): {lead_res.status_code} {lead_res.text[:200]}', flush=True)
+            except Exception as e:
+                print(f'[INSTANTLY] Lead add error ({lead["email"]}): {e}', flush=True)
 
-        # 2. Add email sequence steps
-        print(f'[INSTANTLY] Adding {len(sequence)} email steps')
-        for email in sequence:
-            await client.post(
-                f'{INSTANTLY_API}/campaign/subsequence',
-                headers=headers,
-                json={
-                    'campaign_id': campaign_id,
-                    'subsequence': {
-                        'delay': email['send_day'],
-                        'type': 'email',
-                        'subject': email['subject_a'],
-                        'body': email['body'],
-                    },
-                },
-                timeout=30,
-            )
+        print(f'[INSTANTLY] Added {added}/{len(leads)} leads', flush=True)
 
-        # 3. Add leads in batches
-        print(f'[INSTANTLY] Adding {len(leads)} leads in batches of {LEADS_BATCH_SIZE}')
-        for i in range(0, len(leads), LEADS_BATCH_SIZE):
-            batch = leads[i:i + LEADS_BATCH_SIZE]
-            leads_payload = [
-                {
-                    'email': lead['email'],
-                    'first_name': (lead.get('owner_name') or lead.get('business_name', '')).split()[0],
-                    'company_name': lead.get('business_name', ''),
-                    'city': lead.get('city', ''),
-                }
-                for lead in batch
-            ]
-            await client.post(
-                f'{INSTANTLY_API}/lead/add',
-                headers=headers,
-                json={
-                    'campaign_id': campaign_id,
-                    'leads': leads_payload,
-                    'skip_if_in_workspace': True,
-                },
-                timeout=60,
-            )
-
-        # 4. Launch campaign
-        print(f'[INSTANTLY] Launching campaign {campaign_id}')
-        await client.post(
-            f'{INSTANTLY_API}/campaign/launch',
+        # 3. Activate campaign
+        print(f'[INSTANTLY] Activating campaign {campaign_id}', flush=True)
+        activate_res = await client.post(
+            f'{INSTANTLY_API}/campaigns/{campaign_id}/activate',
             headers=headers,
-            json={'campaign_id': campaign_id},
+            json={},
             timeout=30,
         )
+        print(f'[INSTANTLY] Activate response: {activate_res.status_code} {activate_res.text[:200]}', flush=True)
+        activate_res.raise_for_status()
 
     return campaign_id

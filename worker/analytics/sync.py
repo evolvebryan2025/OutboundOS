@@ -29,10 +29,16 @@ logger = logging.getLogger(__name__)
 
 INSTANTLY_BASE_URL = "https://api.instantly.ai/api/v1"
 
-supabase = create_client(
-    os.environ["SUPABASE_URL"],
-    os.environ["SUPABASE_SERVICE_ROLE_KEY"],
-)
+_supabase = None
+
+def get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_client(
+            os.environ["SUPABASE_URL"],
+            os.environ["SUPABASE_SERVICE_ROLE_KEY"],
+        )
+    return _supabase
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +91,7 @@ def upsert_analytics(
         "emails_sent": int(stats.get("emails_sent") or 0),
         "synced_at": datetime.utcnow().isoformat(),
     }
-    supabase.table("campaign_analytics").upsert(
+    get_supabase().table("campaign_analytics").upsert(
         payload, on_conflict="campaign_id"
     ).execute()
     logger.info("Upserted analytics for campaign %s", campaign_id)
@@ -112,7 +118,7 @@ async def sync_all_active_campaigns() -> dict:
     """
     # Collect every active campaign (we need the Instantly campaign ID + owner)
     campaigns_res = (
-        supabase.table("campaigns")
+        get_supabase().table("campaigns")
         .select("id, user_id, instantly_campaign_id")
         .eq("status", "active")
         .execute()
@@ -126,7 +132,7 @@ async def sync_all_active_campaigns() -> dict:
     # Build a lookup: user_id → instantly_api_key  (one DB call per unique user)
     user_ids = list({c["user_id"] for c in campaigns})
     profiles_res = (
-        supabase.table("profiles")
+        get_supabase().table("profiles")
         .select("id, instantly_api_key")
         .in_("id", user_ids)
         .execute()
@@ -183,7 +189,7 @@ async def sync_campaign_for_user(user_id: str) -> dict:
     """
     # Get user's Instantly API key
     profile_res = (
-        supabase.table("profiles")
+        get_supabase().table("profiles")
         .select("instantly_api_key")
         .eq("id", user_id)
         .single()
@@ -196,7 +202,7 @@ async def sync_campaign_for_user(user_id: str) -> dict:
 
     # Get active campaigns for this user
     campaigns_res = (
-        supabase.table("campaigns")
+        get_supabase().table("campaigns")
         .select("id, instantly_campaign_id")
         .eq("user_id", user_id)
         .eq("status", "active")

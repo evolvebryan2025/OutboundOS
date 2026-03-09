@@ -1,11 +1,13 @@
 # worker/main.py
+import os
+from dotenv import load_dotenv
+load_dotenv()  # Must run before any imports that read env vars
+
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 import asyncio
-import os
 import traceback
 import httpx as httpx_client
-from dotenv import load_dotenv
 from pipeline.scraper import scrape_google_maps
 from pipeline.extractor import extract_emails
 from pipeline.verifier import verify_emails
@@ -16,7 +18,6 @@ from pipeline.instantly import push_to_instantly
 from analytics.sync import sync_campaign_for_user
 from supabase import create_client
 
-load_dotenv()
 app = FastAPI()
 supabase = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_ROLE_KEY'])
 

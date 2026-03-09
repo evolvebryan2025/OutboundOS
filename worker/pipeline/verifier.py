@@ -9,10 +9,13 @@ REACHER_URL = os.environ.get('REACHER_URL', 'http://localhost:8080') + '/v0/chec
 
 async def _reacher_available() -> bool:
     """Check if Reacher service is reachable."""
+    if not os.environ.get('REACHER_URL'):
+        print('REACHER_URL not set — Reacher is not configured.')
+        return False
     try:
-        base = os.environ.get('REACHER_URL', 'http://localhost:8080')
+        base = os.environ['REACHER_URL']
         async with httpx.AsyncClient() as client:
-            resp = await client.get(base, timeout=5)
+            resp = await client.post(base + '/v0/check_email', json={'to_email': 'test@example.com'}, timeout=10)
             return resp.status_code < 500
     except Exception:
         return False

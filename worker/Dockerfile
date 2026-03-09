@@ -8,13 +8,14 @@ RUN apt-get update && apt-get install -y \
     gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Copy only worker files (Railway builds from repo root)
+COPY worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers
 RUN playwright install chromium --with-deps
 
-COPY . .
+COPY worker/ .
 
 EXPOSE 8000
 

@@ -1,9 +1,9 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2, Volume2, VolumeX } from 'lucide-react'
 
 const STATUS_LABELS: Record<string, string> = {
   draft: 'Ready',
@@ -16,6 +16,53 @@ const STATUS_LABELS: Record<string, string> = {
   completed: 'Completed',
   paused: 'Paused',
   failed: 'Something went wrong',
+}
+
+function playNotificationSound(type: 'step' | 'done' | 'error') {
+  try {
+    const ctx = new AudioContext()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    gain.gain.value = 0.3
+
+    if (type === 'done') {
+      osc.frequency.value = 880
+      osc.type = 'sine'
+      gain.gain.setValueAtTime(0.3, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.5)
+      // Second tone
+      const osc2 = ctx.createOscillator()
+      const gain2 = ctx.createGain()
+      osc2.connect(gain2)
+      gain2.connect(ctx.destination)
+      osc2.frequency.value = 1174
+      osc2.type = 'sine'
+      gain2.gain.setValueAtTime(0.3, ctx.currentTime + 0.15)
+      gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6)
+      osc2.start(ctx.currentTime + 0.15)
+      osc2.stop(ctx.currentTime + 0.6)
+    } else if (type === 'error') {
+      osc.frequency.value = 300
+      osc.type = 'sawtooth'
+      gain.gain.setValueAtTime(0.2, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.4)
+    } else {
+      osc.frequency.value = 660
+      osc.type = 'sine'
+      gain.gain.setValueAtTime(0.2, ctx.currentTime)
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.2)
+    }
+  } catch {
+    // AudioContext not available
+  }
 }
 
 const STATUS_PROGRESS: Record<string, number> = {
@@ -45,6 +92,22 @@ export function CampaignProgress({ campaignId, initialStatus }: { campaignId: st
     leads_pushed: 0,
   })
   const [retrying, setRetrying] = useState(false)
+  const [soundEnabled, setSoundEnabled] = useState(true)
+  const prevStatusRef = useRef(initialStatus || 'draft')
+
+  const handleStatusChange = useCallback((newStatus: string) => {
+    if (!soundEnabled) return
+    if (newStatus === prevStatusRef.current) return
+
+    if (newStatus === 'review' || newStatus === 'active') {
+      playNotificationSound('done')
+    } else if (newStatus === 'failed') {
+      playNotificationSound('error')
+    } else if (newStatus !== 'draft') {
+      playNotificationSound('step')
+    }
+    prevStatusRef.current = newStatus
+  }, [soundEnabled])
 
   useEffect(() => {
     const terminal = ['active', 'completed', 'draft', 'paused', 'review', 'failed']
@@ -53,12 +116,13 @@ export function CampaignProgress({ campaignId, initialStatus }: { campaignId: st
     const es = new EventSource(`/api/campaigns/${campaignId}/progress`)
     es.onmessage = (e) => {
       const parsed = JSON.parse(e.data) as ProgressData
+      handleStatusChange(parsed.status)
       setData(parsed)
       if (terminal.includes(parsed.status)) es.close()
     }
     es.onerror = () => es.close()
     return () => es.close()
-  }, [campaignId, initialStatus, data.status])
+  }, [campaignId, initialStatus, data.status, handleStatusChange])
 
   async function handleRetry() {
     setRetrying(true)
@@ -71,7 +135,16 @@ export function CampaignProgress({ campaignId, initialStatus }: { campaignId: st
   return (
     <div className="space-y-4 bg-gray-900 rounded-xl p-6 border border-gray-800">
       <div className="flex items-center justify-between">
-        <p className="text-white font-medium">{STATUS_LABELS[data.status] || data.status}</p>
+        <div className="flex items-center gap-2">
+          <p className="text-white font-medium">{STATUS_LABELS[data.status] || data.status}</p>
+          <button
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            className="text-gray-500 hover:text-gray-300 transition-colors"
+            title={soundEnabled ? 'Mute notifications' : 'Unmute notifications'}
+          >
+            {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+          </button>
+        </div>
         <Badge variant={data.status === 'active' ? 'default' : data.status === 'failed' ? 'destructive' : 'secondary'} className="capitalize">
           {data.status}
         </Badge>

@@ -10,6 +10,11 @@ export default async function DashboardPage() {
   const { data: profile } = await supabase
     .from('profiles').select('*').eq('id', user.id).single()
 
+  // Redirect to onboarding if not completed
+  if (!profile?.onboarding_complete) {
+    redirect('/dashboard/onboarding')
+  }
+
   const { data: campaigns } = await supabase
     .from('campaigns').select('*').eq('user_id', user.id)
     .order('created_at', { ascending: false }).limit(5)
@@ -27,7 +32,7 @@ export default async function DashboardPage() {
         </Card>
         <Card className="bg-gray-900 border-gray-800">
           <CardHeader><CardTitle className="text-gray-300 text-sm">Active Campaigns</CardTitle></CardHeader>
-          <CardContent><p className="text-3xl font-bold text-white">{campaigns?.filter(c => c.status === 'active').length || 0}</p></CardContent>
+          <CardContent><p className="text-3xl font-bold text-white">{campaigns?.filter((c: { status: string }) => c.status === 'active').length || 0}</p></CardContent>
         </Card>
         <Card className="bg-gray-900 border-gray-800">
           <CardHeader><CardTitle className="text-gray-300 text-sm">Plan</CardTitle></CardHeader>
@@ -38,7 +43,7 @@ export default async function DashboardPage() {
         <div>
           <h2 className="text-lg font-semibold text-white mb-4">Recent Campaigns</h2>
           <div className="space-y-3">
-            {campaigns.map(c => (
+            {campaigns.map((c: { id: string; name: string; business_type: string; city: string; status: string }) => (
               <Card key={c.id} className="bg-gray-900 border-gray-800">
                 <CardContent className="flex items-center justify-between py-4">
                   <div>
@@ -47,6 +52,8 @@ export default async function DashboardPage() {
                   </div>
                   <span className={`text-xs px-2 py-1 rounded-full capitalize ${
                     c.status === 'active' ? 'bg-green-500/20 text-green-400' :
+                    c.status === 'failed' ? 'bg-red-500/20 text-red-400' :
+                    c.status === 'review' ? 'bg-yellow-500/20 text-yellow-400' :
                     c.status === 'draft' ? 'bg-gray-500/20 text-gray-400' :
                     'bg-blue-500/20 text-blue-400'
                   }`}>{c.status}</span>

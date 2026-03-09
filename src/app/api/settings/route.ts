@@ -8,6 +8,7 @@ const UpdateSettingsSchema = z.object({
   stealth_gpt_api_key: z.string().nullable().optional(),
   apify_api_token: z.string().nullable().optional(),
   resend_api_key: z.string().nullable().optional(),
+  onboarding_complete: z.boolean().optional(),
 }).passthrough()
 
 export async function GET() {

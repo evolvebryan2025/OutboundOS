@@ -1,13 +1,14 @@
 # worker/main.py
 from fastapi import FastAPI, Header, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncio
 import os
+import traceback
 from dotenv import load_dotenv
 from pipeline.scraper import scrape_google_maps
 from pipeline.extractor import extract_emails
 from pipeline.verifier import verify_emails
+from pipeline.context import generate_campaign_context
 from pipeline.generator import generate_sequence
 from pipeline.humanizer import humanize_sequence
 from pipeline.instantly import push_to_instantly
@@ -18,8 +19,32 @@ load_dotenv()
 app = FastAPI()
 supabase = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_ROLE_KEY'])
 
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 10
+
+# Friendly error messages for each pipeline step
+STEP_ERROR_MESSAGES = {
+    'context': 'Failed to generate campaign context. Please try again.',
+    'scraping': 'Google Maps scraping failed. This is usually temporary — try retrying.',
+    'extracting': 'Email extraction from websites failed. Some websites may be unreachable.',
+    'verifying': 'Email verification service is temporarily unavailable.',
+    'generating': 'AI email sequence generation failed. Please retry.',
+    'humanizing': 'Email humanization failed. Your campaign will use the original AI-generated emails.',
+    'pushing': 'Could not connect to your Instantly account. Please check your API key in Settings.',
+}
+
 
 class PipelineRequest(BaseModel):
+    campaign_id: str
+    user_id: str
+
+
+class ResumeRequest(BaseModel):
+    campaign_id: str
+    user_id: str
+
+
+class ApproveRequest(BaseModel):
     campaign_id: str
     user_id: str
 
@@ -29,88 +54,220 @@ def verify_worker_secret(x_worker_secret: str = Header(None)):
         raise HTTPException(status_code=401, detail='Unauthorized')
 
 
+async def retry_step(step_name: str, func, *args, **kwargs):
+    """Retry a pipeline step up to MAX_RETRIES times."""
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            return await func(*args, **kwargs)
+        except Exception as e:
+            if attempt == MAX_RETRIES:
+                raise
+            print(f'Step {step_name} failed (attempt {attempt}/{MAX_RETRIES}): {e}')
+            await asyncio.sleep(RETRY_DELAY_SECONDS)
+
+
 @app.post('/pipeline/start')
 async def start_pipeline(
     request: PipelineRequest,
     background_tasks: BackgroundTasks,
-    x_worker_secret: str = Header(None)
+    x_worker_secret: str = Header(None),
 ):
     verify_worker_secret(x_worker_secret)
     background_tasks.add_task(run_pipeline, request.campaign_id, request.user_id)
     return {'status': 'started', 'campaign_id': request.campaign_id}
 
 
-async def run_pipeline(campaign_id: str, user_id: str):
-    """Main pipeline: scrape → extract → verify → generate → humanize → push"""
+@app.post('/pipeline/resume')
+async def resume_pipeline(
+    request: ResumeRequest,
+    background_tasks: BackgroundTasks,
+    x_worker_secret: str = Header(None),
+):
+    verify_worker_secret(x_worker_secret)
+    result = supabase.table('campaigns').select('failed_at_step').eq('id', request.campaign_id).single().execute()
+    failed_step = result.data.get('failed_at_step')
+    if not failed_step:
+        raise HTTPException(status_code=400, detail='Campaign has no failed step to resume from')
+    # Clear error state before retrying
+    supabase.table('campaigns').update({
+        'status': 'draft',
+        'error_message': None,
+        'failed_at_step': None,
+    }).eq('id', request.campaign_id).execute()
+    background_tasks.add_task(run_pipeline, request.campaign_id, request.user_id, resume_from=failed_step)
+    return {'status': 'resumed', 'campaign_id': request.campaign_id, 'from_step': failed_step}
+
+
+@app.post('/pipeline/approve')
+async def approve_campaign(
+    request: ApproveRequest,
+    background_tasks: BackgroundTasks,
+    x_worker_secret: str = Header(None),
+):
+    verify_worker_secret(x_worker_secret)
+    background_tasks.add_task(run_push_step, request.campaign_id, request.user_id)
+    return {'status': 'approved', 'campaign_id': request.campaign_id}
+
+
+async def fail_campaign(campaign_id: str, step: str, error: Exception):
+    """Mark campaign as failed with a friendly error message."""
+    friendly_msg = STEP_ERROR_MESSAGES.get(step, f'An unexpected error occurred during {step}.')
+    supabase.table('campaigns').update({
+        'status': 'failed',
+        'error_message': friendly_msg,
+        'failed_at_step': step,
+    }).eq('id', campaign_id).execute()
+    print(f'Pipeline FAILED at step "{step}" for campaign {campaign_id}: {error}')
+    print(traceback.format_exc())
+
+
+async def run_pipeline(campaign_id: str, user_id: str, resume_from: str = None):
+    """Main pipeline: context → scrape → extract → verify → generate → humanize → PAUSE for review"""
     try:
-        # Fetch campaign details
         result = supabase.table('campaigns').select('*').eq('id', campaign_id).single().execute()
         campaign = result.data
-
-        # Fetch user profile (for API keys)
         profile_result = supabase.table('profiles').select('*').eq('id', user_id).single().execute()
         profile = profile_result.data
 
-        await update_status(campaign_id, 'scraping')
+        steps_order = ['context', 'scraping', 'extracting', 'verifying', 'generating', 'humanizing']
+        start_index = 0
+        if resume_from and resume_from in steps_order:
+            start_index = steps_order.index(resume_from)
 
-        # Step 1: Scrape Google Maps
-        businesses = await scrape_google_maps(
-            business_type=campaign['business_type'],
-            city=campaign['city'],
-            target_count=1500
-        )
-        supabase.table('campaigns').update({'leads_scraped': len(businesses)}).eq('id', campaign_id).execute()
+        # --- Step 0: Generate context (pain_point + outcome) if missing ---
+        if start_index <= 0 and (not campaign.get('pain_point') or not campaign.get('outcome')):
+            try:
+                context = await retry_step('context', generate_campaign_context,
+                    campaign['business_type'], campaign['city'], campaign['offer'])
+                supabase.table('campaigns').update({
+                    'pain_point': context['pain_point'],
+                    'outcome': context['outcome'],
+                }).eq('id', campaign_id).execute()
+                campaign['pain_point'] = context['pain_point']
+                campaign['outcome'] = context['outcome']
+            except Exception as e:
+                await fail_campaign(campaign_id, 'context', e)
+                return
 
-        await update_status(campaign_id, 'scraping')
+        # --- Steps 1-3: Scrape/Extract/Verify (skip if BYOL) ---
+        is_byol = campaign.get('lead_source') == 'uploaded'
 
-        # Step 2: Extract emails from websites
-        leads_with_emails = await extract_emails(businesses)
+        if not is_byol and start_index <= 1:
+            try:
+                await update_status(campaign_id, 'scraping')
+                businesses = await retry_step('scraping', scrape_google_maps,
+                    business_type=campaign['business_type'],
+                    city=campaign['city'],
+                    target_count=1500)
+                supabase.table('campaigns').update({'leads_scraped': len(businesses)}).eq('id', campaign_id).execute()
+            except Exception as e:
+                await fail_campaign(campaign_id, 'scraping', e)
+                return
 
-        # Step 3: Verify emails
-        await update_status(campaign_id, 'scraping')
-        verified_leads = await verify_emails(leads_with_emails)
-        verified_leads = verified_leads[:1000]  # Cap at 1,000
+            try:
+                leads_with_emails = await retry_step('extracting', extract_emails, businesses)
+            except Exception as e:
+                await fail_campaign(campaign_id, 'extracting', e)
+                return
 
-        # Save leads to Supabase
-        leads_to_insert = [{
-            'campaign_id': campaign_id,
-            'user_id': user_id,
-            'business_name': lead['name'],
-            'email': lead['email'],
-            'phone': lead.get('phone'),
-            'website': lead.get('website'),
-            'city': campaign['city'],
-            'niche': campaign['business_type'],
-            'verified': True,
-        } for lead in verified_leads]
-        supabase.table('leads').insert(leads_to_insert).execute()
-        supabase.table('campaigns').update({'leads_verified': len(verified_leads)}).eq('id', campaign_id).execute()
+            try:
+                verified_leads = await retry_step('verifying', verify_emails, leads_with_emails)
+                verified_leads = verified_leads[:1000]
+                leads_to_insert = [{
+                    'campaign_id': campaign_id,
+                    'user_id': user_id,
+                    'business_name': lead['name'],
+                    'email': lead['email'],
+                    'phone': lead.get('phone'),
+                    'website': lead.get('website'),
+                    'city': campaign['city'],
+                    'niche': campaign['business_type'],
+                    'verified': True,
+                } for lead in verified_leads]
+                supabase.table('leads').insert(leads_to_insert).execute()
+                supabase.table('campaigns').update({'leads_verified': len(verified_leads)}).eq('id', campaign_id).execute()
+            except Exception as e:
+                await fail_campaign(campaign_id, 'verifying', e)
+                return
 
-        # Step 4: Generate sequence
-        await update_status(campaign_id, 'generating')
-        sequence = await generate_sequence(campaign)
-        supabase.table('sequences').insert({
-            'campaign_id': campaign_id,
-            'user_id': user_id,
-            'emails': sequence,
-        }).execute()
+        elif is_byol and start_index <= 2:
+            # BYOL: verify uploaded leads only
+            try:
+                await update_status(campaign_id, 'scraping')
+                leads_result = supabase.table('leads').select('*').eq('campaign_id', campaign_id).eq('verified', False).execute()
+                unverified = [{'email': l['email'], 'name': l['business_name'], 'phone': l.get('phone'), 'website': l.get('website')} for l in leads_result.data]
+                if unverified:
+                    verified_leads = await retry_step('verifying', verify_emails, unverified)
+                    verified_emails = {l['email'] for l in verified_leads}
+                    for lead in leads_result.data:
+                        is_verified = lead['email'] in verified_emails
+                        supabase.table('leads').update({'verified': is_verified}).eq('id', lead['id']).execute()
+                    supabase.table('campaigns').update({
+                        'leads_scraped': len(leads_result.data),
+                        'leads_verified': len(verified_leads),
+                    }).eq('id', campaign_id).execute()
+            except Exception as e:
+                await fail_campaign(campaign_id, 'verifying', e)
+                return
 
-        # Step 5: Humanize (if enabled and API key provided)
-        if campaign.get('humanize_enabled') and profile.get('stealth_gpt_api_key'):
-            await update_status(campaign_id, 'humanizing')
-            humanized = await humanize_sequence(sequence, profile['stealth_gpt_api_key'])
-            supabase.table('sequences').update({'humanized_emails': humanized}).eq('campaign_id', campaign_id).execute()
-            final_sequence = humanized
-        else:
-            final_sequence = sequence
+        # --- Step 4: Generate sequence ---
+        if start_index <= 4:
+            try:
+                await update_status(campaign_id, 'generating')
+                sequence = await retry_step('generating', generate_sequence, campaign)
+                supabase.table('sequences').upsert({
+                    'campaign_id': campaign_id,
+                    'user_id': user_id,
+                    'emails': sequence,
+                }, on_conflict='campaign_id').execute()
+            except Exception as e:
+                await fail_campaign(campaign_id, 'generating', e)
+                return
 
-        # Step 6: Push to Instantly AI
+        # --- Step 5: Humanize (optional) ---
+        if start_index <= 5:
+            if campaign.get('humanize_enabled') and profile.get('stealth_gpt_api_key'):
+                try:
+                    await update_status(campaign_id, 'humanizing')
+                    seq_result = supabase.table('sequences').select('emails').eq('campaign_id', campaign_id).single().execute()
+                    current_sequence = seq_result.data['emails']
+                    humanized = await retry_step('humanizing', humanize_sequence, current_sequence, profile['stealth_gpt_api_key'])
+                    supabase.table('sequences').update({'humanized_emails': humanized}).eq('campaign_id', campaign_id).execute()
+                except Exception as e:
+                    # Humanization failure is non-blocking — log but continue
+                    print(f'Humanization failed (non-blocking): {e}')
+
+        # --- PAUSE: Set status to "review" so client can preview emails ---
+        await update_status(campaign_id, 'review')
+
+    except Exception as e:
+        await fail_campaign(campaign_id, 'unknown', e)
+
+
+async def run_push_step(campaign_id: str, user_id: str):
+    """Step 6: Push approved emails to Instantly AI."""
+    try:
+        result = supabase.table('campaigns').select('*').eq('id', campaign_id).single().execute()
+        campaign = result.data
+        profile_result = supabase.table('profiles').select('*').eq('id', user_id).single().execute()
+        profile = profile_result.data
+
         await update_status(campaign_id, 'pushing')
-        instantly_campaign_id = await push_to_instantly(
+
+        # Get the final sequence (humanized if available, otherwise original)
+        seq_result = supabase.table('sequences').select('*').eq('campaign_id', campaign_id).single().execute()
+        final_sequence = seq_result.data.get('humanized_emails') or seq_result.data['emails']
+
+        # Get verified leads
+        leads_result = supabase.table('leads').select('*').eq('campaign_id', campaign_id).eq('verified', True).execute()
+        verified_leads = leads_result.data
+
+        instantly_campaign_id = await retry_step('pushing', push_to_instantly,
             api_key=profile['instantly_api_key'],
             campaign_name=campaign['name'],
             leads=verified_leads,
             sequence=final_sequence,
+            sending_accounts=campaign.get('sending_accounts', []),
         )
 
         supabase.table('campaigns').update({
@@ -119,13 +276,10 @@ async def run_pipeline(campaign_id: str, user_id: str):
             'leads_pushed': len(verified_leads),
         }).eq('id', campaign_id).execute()
 
-        # Deduct credits from user
         supabase.rpc('decrement_credits', {'user_id': user_id, 'amount': len(verified_leads)}).execute()
 
     except Exception as e:
-        supabase.table('campaigns').update({'status': 'draft'}).eq('id', campaign_id).execute()
-        print(f'Pipeline error for campaign {campaign_id}: {e}')
-        raise
+        await fail_campaign(campaign_id, 'pushing', e)
 
 
 async def update_status(campaign_id: str, status: str):

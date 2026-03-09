@@ -129,6 +129,7 @@ async def approve_campaign(
     x_worker_secret: str = Header(None),
 ):
     verify_worker_secret(x_worker_secret)
+    print(f'[APPROVE] Received approve for campaign={request.campaign_id} user={request.user_id}', flush=True)
     background_tasks.add_task(run_push_step, request.campaign_id, request.user_id)
     return {'status': 'approved', 'campaign_id': request.campaign_id}
 
@@ -141,7 +142,7 @@ async def fail_campaign(campaign_id: str, step: str, error: Exception):
         'error_message': friendly_msg,
         'failed_at_step': step,
     }).eq('id', campaign_id).execute()
-    print(f'Pipeline FAILED at step "{step}" for campaign {campaign_id}: {error}')
+    print(f'Pipeline FAILED at step "{step}" for campaign {campaign_id}: {error}', flush=True)
     print(traceback.format_exc())
 
     # Send failure notification
@@ -291,31 +292,48 @@ async def run_pipeline(campaign_id: str, user_id: str, resume_from: str = None):
 
 async def run_push_step(campaign_id: str, user_id: str):
     """Step 6: Push approved emails to Instantly AI."""
+    import sys
     try:
-        print(f'[PUSH] Starting push for campaign {campaign_id}')
+        print(f'[PUSH] === Starting push for campaign {campaign_id}, user {user_id} ===', flush=True)
+        sys.stdout.flush()
+
         result = supabase.table('campaigns').select('*').eq('id', campaign_id).single().execute()
         campaign = result.data
+        print(f'[PUSH] Campaign loaded: {campaign["name"]} (status={campaign["status"]})', flush=True)
+
         profile_result = supabase.table('profiles').select('*').eq('id', user_id).single().execute()
         profile = profile_result.data
+        has_key = bool(profile.get('instantly_api_key'))
+        print(f'[PUSH] Profile loaded: {profile["email"]}, has_instantly_key={has_key}', flush=True)
+
+        if not has_key:
+            print('[PUSH] ERROR: No Instantly API key found in profile!', flush=True)
+            await fail_campaign(campaign_id, 'pushing', Exception('No Instantly API key configured. Please add it in Settings.'))
+            return
 
         await update_status(campaign_id, 'pushing')
+        print('[PUSH] Status set to pushing', flush=True)
 
         # Get the final sequence (humanized if available, otherwise original)
         seq_result = supabase.table('sequences').select('*').eq('campaign_id', campaign_id).single().execute()
+        if not seq_result.data:
+            print('[PUSH] ERROR: No sequence found for campaign!', flush=True)
+            await fail_campaign(campaign_id, 'pushing', Exception('No email sequence found for this campaign'))
+            return
         final_sequence = seq_result.data.get('humanized_emails') or seq_result.data['emails']
-        print(f'[PUSH] Sequence has {len(final_sequence)} emails')
+        print(f'[PUSH] Sequence has {len(final_sequence)} emails', flush=True)
 
         # Get verified leads
         leads_result = supabase.table('leads').select('*').eq('campaign_id', campaign_id).eq('verified', True).execute()
         verified_leads = leads_result.data
-        print(f'[PUSH] Found {len(verified_leads)} verified leads')
+        print(f'[PUSH] Found {len(verified_leads)} verified leads', flush=True)
 
         if not verified_leads:
-            print('[PUSH] WARNING: No verified leads found, cannot push to Instantly')
+            print('[PUSH] WARNING: No verified leads found, cannot push to Instantly', flush=True)
             await fail_campaign(campaign_id, 'pushing', Exception('No verified leads found for this campaign'))
             return
 
-        print(f'[PUSH] Calling Instantly API with key ending in ...{profile["instantly_api_key"][-4:]}')
+        print(f'[PUSH] Calling Instantly API with key ending in ...{profile["instantly_api_key"][-4:]}', flush=True)
         instantly_campaign_id = await retry_step('pushing', push_to_instantly,
             api_key=profile['instantly_api_key'],
             campaign_name=campaign['name'],
@@ -323,7 +341,7 @@ async def run_push_step(campaign_id: str, user_id: str):
             sequence=final_sequence,
             sending_accounts=campaign.get('sending_accounts', []),
         )
-        print(f'[PUSH] Instantly campaign created: {instantly_campaign_id}')
+        print(f'[PUSH] Instantly campaign created: {instantly_campaign_id}', flush=True)
 
         supabase.table('campaigns').update({
             'status': 'active',
@@ -352,6 +370,9 @@ async def run_push_step(campaign_id: str, user_id: str):
             })
 
     except Exception as e:
+        print(f'[PUSH] EXCEPTION in run_push_step: {type(e).__name__}: {e}', flush=True)
+        import traceback
+        traceback.print_exc()
         await fail_campaign(campaign_id, 'pushing', e)
 
 

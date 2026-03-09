@@ -18,6 +18,7 @@ async def push_to_instantly(
 
     async with httpx.AsyncClient() as client:
         # 1. Create campaign
+        print(f'[INSTANTLY] Creating campaign: {campaign_name}')
         campaign_payload = {'name': campaign_name, 'daily_limit': 50}
         campaign_res = await client.post(
             f'{INSTANTLY_API}/campaign/create',
@@ -25,8 +26,10 @@ async def push_to_instantly(
             json=campaign_payload,
             timeout=30,
         )
+        print(f'[INSTANTLY] Create response: {campaign_res.status_code} {campaign_res.text[:200]}')
         campaign_res.raise_for_status()
         campaign_id = campaign_res.json()['id']
+        print(f'[INSTANTLY] Campaign ID: {campaign_id}')
 
         # 1b. Assign sending accounts if specified
         if sending_accounts:
@@ -38,6 +41,7 @@ async def push_to_instantly(
             )
 
         # 2. Add email sequence steps
+        print(f'[INSTANTLY] Adding {len(sequence)} email steps')
         for email in sequence:
             await client.post(
                 f'{INSTANTLY_API}/campaign/subsequence',
@@ -55,6 +59,7 @@ async def push_to_instantly(
             )
 
         # 3. Add leads in batches
+        print(f'[INSTANTLY] Adding {len(leads)} leads in batches of {LEADS_BATCH_SIZE}')
         for i in range(0, len(leads), LEADS_BATCH_SIZE):
             batch = leads[i:i + LEADS_BATCH_SIZE]
             leads_payload = [
@@ -78,6 +83,7 @@ async def push_to_instantly(
             )
 
         # 4. Launch campaign
+        print(f'[INSTANTLY] Launching campaign {campaign_id}')
         await client.post(
             f'{INSTANTLY_API}/campaign/launch',
             headers=headers,

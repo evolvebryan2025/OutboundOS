@@ -288,6 +288,7 @@ async def run_pipeline(campaign_id: str, user_id: str, resume_from: str = None):
 async def run_push_step(campaign_id: str, user_id: str):
     """Step 6: Push approved emails to Instantly AI."""
     try:
+        print(f'[PUSH] Starting push for campaign {campaign_id}')
         result = supabase.table('campaigns').select('*').eq('id', campaign_id).single().execute()
         campaign = result.data
         profile_result = supabase.table('profiles').select('*').eq('id', user_id).single().execute()
@@ -298,11 +299,19 @@ async def run_push_step(campaign_id: str, user_id: str):
         # Get the final sequence (humanized if available, otherwise original)
         seq_result = supabase.table('sequences').select('*').eq('campaign_id', campaign_id).single().execute()
         final_sequence = seq_result.data.get('humanized_emails') or seq_result.data['emails']
+        print(f'[PUSH] Sequence has {len(final_sequence)} emails')
 
         # Get verified leads
         leads_result = supabase.table('leads').select('*').eq('campaign_id', campaign_id).eq('verified', True).execute()
         verified_leads = leads_result.data
+        print(f'[PUSH] Found {len(verified_leads)} verified leads')
 
+        if not verified_leads:
+            print('[PUSH] WARNING: No verified leads found, cannot push to Instantly')
+            await fail_campaign(campaign_id, 'pushing', Exception('No verified leads found for this campaign'))
+            return
+
+        print(f'[PUSH] Calling Instantly API with key ending in ...{profile["instantly_api_key"][-4:]}')
         instantly_campaign_id = await retry_step('pushing', push_to_instantly,
             api_key=profile['instantly_api_key'],
             campaign_name=campaign['name'],
@@ -310,6 +319,7 @@ async def run_push_step(campaign_id: str, user_id: str):
             sequence=final_sequence,
             sending_accounts=campaign.get('sending_accounts', []),
         )
+        print(f'[PUSH] Instantly campaign created: {instantly_campaign_id}')
 
         supabase.table('campaigns').update({
             'status': 'active',
@@ -317,7 +327,11 @@ async def run_push_step(campaign_id: str, user_id: str):
             'leads_pushed': len(verified_leads),
         }).eq('id', campaign_id).execute()
 
-        supabase.rpc('decrement_credits', {'user_id': user_id, 'amount': len(verified_leads)}).execute()
+        # Decrement credits (non-blocking if function doesn't exist)
+        try:
+            supabase.rpc('decrement_credits', {'user_id': user_id, 'amount': len(verified_leads)}).execute()
+        except Exception as credit_err:
+            print(f'[PUSH] Credit decrement failed (non-blocking): {credit_err}')
 
         # Send "campaign live" notification
         await send_notification('live', profile['email'], {

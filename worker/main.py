@@ -218,7 +218,8 @@ async def run_pipeline(campaign_id: str, user_id: str, resume_from: str = None):
                     'niche': campaign['business_type'],
                     'verified': True,
                 } for lead in verified_leads]
-                supabase.table('leads').insert(leads_to_insert).execute()
+                if leads_to_insert:
+                    supabase.table('leads').insert(leads_to_insert).execute()
                 supabase.table('campaigns').update({'leads_verified': len(verified_leads)}).eq('id', campaign_id).execute()
             except Exception as e:
                 await fail_campaign(campaign_id, 'verifying', e)

@@ -1,9 +1,21 @@
 # worker/pipeline/verifier.py
 import asyncio
+import os
 import httpx
 from typing import List, Dict
 
-REACHER_URL = 'http://localhost:8080/v0/check_email'
+REACHER_URL = os.environ.get('REACHER_URL', 'http://localhost:8080') + '/v0/check_email'
+
+
+async def _reacher_available() -> bool:
+    """Check if Reacher service is reachable."""
+    try:
+        base = os.environ.get('REACHER_URL', 'http://localhost:8080')
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(base, timeout=5)
+            return resp.status_code < 500
+    except Exception:
+        return False
 
 
 async def verify_single_email(client: httpx.AsyncClient, lead: Dict) -> Dict | None:
@@ -30,7 +42,13 @@ async def verify_single_email(client: httpx.AsyncClient, lead: Dict) -> Dict | N
 
 
 async def verify_emails(leads: List[Dict], concurrency: int = 10) -> List[Dict]:
-    """Verify a batch of emails, return only valid ones."""
+    """Verify a batch of emails, return only valid ones.
+    If Reacher is not available, skip verification and return all leads.
+    """
+    if not await _reacher_available():
+        print('Reacher not available — skipping email verification, passing all leads through.')
+        return leads
+
     semaphore = asyncio.Semaphore(concurrency)
     verified = []
 

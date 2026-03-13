@@ -171,6 +171,146 @@ function IntegrationCard({
   )
 }
 
+type ReacherTestStatus = 'idle' | 'testing' | 'success' | 'error'
+
+interface ReacherResult {
+  is_reachable: string
+  can_connect_smtp: boolean
+  is_disposable: boolean
+  is_role_account: boolean
+  has_mx_records: boolean
+}
+
+function ResultRow({ label, value, good }: { label: string; value: string; good: boolean }) {
+  return (
+    <div className="flex items-center justify-between bg-gray-800 rounded px-3 py-2">
+      <span className="text-gray-400">{label}</span>
+      <span className={good ? 'text-green-400' : 'text-red-400'}>{value}</span>
+    </div>
+  )
+}
+
+function ReacherTestCard() {
+  const [email, setEmail] = useState('')
+  const [status, setStatus] = useState<ReacherTestStatus>('idle')
+  const [result, setResult] = useState<ReacherResult | null>(null)
+  const [error, setError] = useState('')
+  const [isValid, setIsValid] = useState<boolean | null>(null)
+
+  async function handleTest() {
+    if (!email.trim() || !email.includes('@')) {
+      setError('Enter a valid email address')
+      setStatus('error')
+      return
+    }
+
+    setStatus('testing')
+    setError('')
+    setResult(null)
+    setIsValid(null)
+
+    try {
+      const res = await fetch('/api/settings/test-reacher', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim() }),
+      })
+      const data = await res.json()
+
+      if (data.success) {
+        setStatus('success')
+        setResult(data.details)
+        setIsValid(data.is_valid)
+      } else {
+        setStatus('error')
+        setError(data.error || 'Verification failed')
+      }
+    } catch {
+      setStatus('error')
+      setError('Could not reach the verification service')
+    }
+  }
+
+  return (
+    <Card className="bg-gray-900 border-gray-800">
+      <CardHeader className="pb-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-white text-base">Email Verification (Reacher)</CardTitle>
+              <Badge className="bg-purple-500/20 text-purple-400 border-0 text-xs">Infrastructure</Badge>
+            </div>
+            <CardDescription className="text-gray-400 mt-1 text-sm">
+              Test SMTP-level email verification. Checks deliverability, disposable status, and MX records.
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label className="text-gray-400 text-xs">Email address to verify</Label>
+          <div className="flex gap-2">
+            <Input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="test@example.com"
+              className="bg-gray-800 border-gray-700 text-white placeholder:text-gray-600"
+              onKeyDown={e => e.key === 'Enter' && handleTest()}
+            />
+            <Button
+              onClick={handleTest}
+              variant="outline"
+              size="sm"
+              className="border-gray-700 text-gray-300 hover:text-white shrink-0"
+              disabled={status === 'testing' || !email.trim()}
+            >
+              {status === 'testing' ? <Loader2 size={14} className="animate-spin" /> : 'Test'}
+            </Button>
+          </div>
+          <p className="text-gray-500 text-xs">
+            Sends a live SMTP check via Reacher. Takes 5-15 seconds.
+          </p>
+        </div>
+
+        {status === 'error' && (
+          <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2 bg-red-500/10 text-red-400">
+            <XCircle size={14} />
+            {error}
+          </div>
+        )}
+
+        {status === 'testing' && (
+          <div className="flex items-center gap-2 text-sm rounded-lg px-3 py-2 bg-blue-500/10 text-blue-400">
+            <Loader2 size={14} className="animate-spin" />
+            Verifying email via SMTP... this may take up to 30 seconds
+          </div>
+        )}
+
+        {status === 'success' && result && (
+          <div className="space-y-3">
+            <div className={`flex items-center gap-2 text-sm rounded-lg px-3 py-2 ${
+              isValid ? 'bg-green-500/10 text-green-400' : 'bg-yellow-500/10 text-yellow-400'
+            }`}>
+              {isValid ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
+              {isValid
+                ? 'This email would pass verification in a campaign'
+                : 'This email would be filtered out during a campaign'}
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <ResultRow label="Reachable" value={result.is_reachable} good={result.is_reachable === 'safe'} />
+              <ResultRow label="SMTP Connect" value={result.can_connect_smtp ? 'Yes' : 'No'} good={result.can_connect_smtp} />
+              <ResultRow label="Disposable" value={result.is_disposable ? 'Yes' : 'No'} good={!result.is_disposable} />
+              <ResultRow label="MX Records" value={result.has_mx_records ? 'Yes' : 'No'} good={result.has_mx_records} />
+              <ResultRow label="Role Account" value={result.is_role_account ? 'Yes' : 'No'} good={!result.is_role_account} />
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function SettingsPage() {
   const [profile, setProfile] = useState<Record<string, string | null>>({})
   const [fullName, setFullName] = useState('')
@@ -254,6 +394,17 @@ export default function SettingsPage() {
                 onSave={saveField}
               />
             ))}
+          </div>
+
+          <Separator className="bg-gray-800" />
+          <div>
+            <h3 className="text-white text-sm font-medium mb-1">Infrastructure Tests</h3>
+            <p className="text-gray-500 text-xs mb-3">
+              These services run on your backend — no API key needed.
+            </p>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <ReacherTestCard />
+            </div>
           </div>
         </TabsContent>
 

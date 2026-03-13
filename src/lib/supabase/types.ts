@@ -19,6 +19,8 @@ export interface Profile {
   credits_monthly: number
   stripe_customer_id: string | null
   stripe_subscription_id: string | null
+  paypal_subscription_id: string | null
+  paypal_payer_id: string | null
   instantly_api_key: string | null
   stealth_gpt_api_key: string | null
   apify_api_token: string | null

@@ -92,6 +92,7 @@ export function CampaignProgress({ campaignId, initialStatus }: { campaignId: st
     leads_pushed: 0,
   })
   const [retrying, setRetrying] = useState(false)
+  const [launching, setLaunching] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
   const prevStatusRef = useRef(initialStatus || 'draft')
 
@@ -130,6 +131,16 @@ export function CampaignProgress({ campaignId, initialStatus }: { campaignId: st
     window.location.reload()
   }
 
+  async function handleLaunch() {
+    setLaunching(true)
+    const res = await fetch(`/api/campaigns/${campaignId}/launch`, { method: 'POST' })
+    if (!res.ok) {
+      setLaunching(false)
+      return
+    }
+    window.location.reload()
+  }
+
   const progress = STATUS_PROGRESS[data.status] ?? 0
 
   return (
@@ -164,6 +175,14 @@ export function CampaignProgress({ campaignId, initialStatus }: { campaignId: st
       )}
 
       {data.status !== 'failed' && <Progress value={progress} className="h-2" />}
+
+      {data.status === 'draft' && (
+        <Button onClick={handleLaunch} disabled={launching}
+          className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3">
+          {launching ? <Loader2 size={16} className="animate-spin mr-2" /> : null}
+          {launching ? 'Launching...' : 'Launch Campaign'}
+        </Button>
+      )}
 
       <div className="grid grid-cols-3 gap-4 text-center">
         <div>

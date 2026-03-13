@@ -29,7 +29,7 @@ export default function OnboardingPage() {
   const [creating, setCreating] = useState(false)
   const [campaignError, setCampaignError] = useState('')
 
-  // Check if user already has a plan (returning from Stripe checkout)
+  // Check if user already has a plan (returning from PayPal checkout)
   const checkPlanStatus = useCallback(async () => {
     const res = await fetch('/api/settings')
     const data = await res.json()
@@ -48,7 +48,7 @@ export default function OnboardingPage() {
 
   async function handlePlanSelect(planKey: string) {
     setPlanLoading(planKey)
-    const res = await fetch('/api/stripe/create-checkout', {
+    const res = await fetch('/api/paypal/create-subscription', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ planKey }),

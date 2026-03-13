@@ -59,6 +59,10 @@ class PipelineRequest(BaseModel):
     user_id: str
 
 
+class TestReacherRequest(BaseModel):
+    email: str
+
+
 class ResumeRequest(BaseModel):
     campaign_id: str
     user_id: str
@@ -132,6 +136,58 @@ async def approve_campaign(
     print(f'[APPROVE] Received approve for campaign={request.campaign_id} user={request.user_id}', flush=True)
     background_tasks.add_task(run_push_step, request.campaign_id, request.user_id)
     return {'status': 'approved', 'campaign_id': request.campaign_id}
+
+
+@app.post('/pipeline/test-reacher')
+async def test_reacher(
+    request: TestReacherRequest,
+    x_worker_secret: str = Header(None),
+):
+    verify_worker_secret(x_worker_secret)
+
+    reacher_url = os.environ.get('REACHER_URL')
+    if not reacher_url:
+        return {'success': False, 'error': 'REACHER_URL not configured on worker'}
+
+    try:
+        async with httpx_client.AsyncClient() as client:
+            resp = await client.post(
+                f'{reacher_url}/v0/check_email',
+                json={'to_email': request.email},
+                timeout=30,
+            )
+
+            if resp.status_code >= 500:
+                return {'success': False, 'error': f'Reacher returned status {resp.status_code}'}
+
+            result = resp.json()
+
+            is_reachable = result.get('is_reachable', 'unknown')
+            smtp = result.get('smtp', {})
+            misc = result.get('misc', {})
+            mx = result.get('mx', {})
+
+            is_valid = (
+                is_reachable == 'safe'
+                and not misc.get('is_disposable', False)
+                and smtp.get('can_connect_smtp', False)
+            )
+
+            return {
+                'success': True,
+                'is_valid': is_valid,
+                'details': {
+                    'is_reachable': is_reachable,
+                    'can_connect_smtp': smtp.get('can_connect_smtp', False),
+                    'is_disposable': misc.get('is_disposable', False),
+                    'is_role_account': misc.get('is_role_account', False),
+                    'has_mx_records': mx.get('accepts_mail', False),
+                },
+            }
+    except httpx_client.TimeoutException:
+        return {'success': False, 'error': 'Reacher request timed out (30s)'}
+    except Exception as e:
+        return {'success': False, 'error': f'Reacher test failed: {str(e)}'}
 
 
 async def fail_campaign(campaign_id: str, step: str, error: Exception):
